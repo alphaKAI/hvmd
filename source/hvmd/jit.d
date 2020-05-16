@@ -29,13 +29,15 @@ static inline void* xmalloc(size_t size) {
 static inline void xfree(void *ptr) { free(ptr); }
 
 typedef enum {
-  Double
+  Double,
+  Bool,
 } CVMValueType;
 
 typedef struct {
   CVMValueType type;
   union {
     double double_val;
+    bool bool_val;
   };
 } CVMValue;
 
@@ -52,9 +54,23 @@ CVMValue *new_CVMValue_Double(double x) {
   return vmvalue;
 }
 
+CVMValue *new_CVMValue_Bool(bool x) {
+  CVMValue *vmvalue = xmalloc(sizeof(CVMValue));
+
+  vmvalue->type = Bool;
+  vmvalue->bool_val = x;
+
+  return vmvalue;
+}
+
 double get_CVMValue_Double(CVMValue *vmvalue) {
   enforce_CVMValueType(vmvalue, Double);
   return vmvalue->double_val;
+}
+
+bool get_CVMValue_Bool(CVMValue *vmvalue) {
+  enforce_CVMValueType(vmvalue, Bool);
+  return vmvalue->bool_val;
 }
 
 CVMValue *dup_CVMValue(CVMValue *src) {
@@ -67,10 +83,10 @@ CVMValue *dup_CVMValue(CVMValue *src) {
                    dst->double_val = src->double_val;
                    break;
                  }
-    default: {
-               fprintf(stderr, "Invalid type\n");
-               exit(EXIT_FAILURE);
-             }
+    case Bool: {
+                   dst->bool_val = src->bool_val;
+                   break;
+                 }
   }
 
   return dst;
@@ -92,10 +108,14 @@ int cmp_CVMValue(CVMValue *lhs, CVMValue *rhs) {
                    }
                    break;
                  }
-    default: {
-               fprintf(stderr, "Invalid type\n");
-               exit(EXIT_FAILURE);
-             }
+    case Bool: {
+                   if (lhs->bool_val != rhs->bool_val) {
+                     return -1;
+                   } else if (lhs->bool_val == rhs->bool_val) {
+                     return 0;
+                   }
+                   break;
+                 }
   }
 
   return -1;
@@ -142,6 +162,11 @@ void push_Stack_Double(Stack *stack, double val) {
   push_Stack(stack, v);
 }
 
+void push_Stack_Bool(Stack *stack, bool val) {
+  CVMValue *v = new_CVMValue_Bool(val);
+  push_Stack(stack, v);
+}
+
 CVMValue *pop_Stack(Stack *stack) {
   CVMValue *ret = stack->stack[--stack->len];
   return ret;
@@ -151,6 +176,12 @@ double pop_Stack_Double(Stack *stack) {
   CVMValue *popped = pop_Stack(stack);
   enforce_CVMValueType(popped, Double);
   return popped->double_val;
+}
+
+bool pop_Stack_Bool(Stack *stack) {
+  CVMValue *popped = pop_Stack(stack);
+  enforce_CVMValueType(popped, Bool);
+  return popped->bool_val;
 }
 
 bool Stack_isempty(Stack *stack) {
@@ -260,10 +291,6 @@ private string genOpsCode() {
   do { \
     push_Stack(stack, current_frame.memory[idx]); \
   } while (0)
-#define SetLocal(idx) \
-  do { \
-    current_frame.memory[idx] = pop_Stack(stack); \
-  } while (0)
 #define Label(label) \
   Label_##label:
 #define Jump(label) \
@@ -273,7 +300,7 @@ private string genOpsCode() {
 
 #define Branch(tBlock) \
   do { \
-    if (pop_Stack_Double(stack) != 0.0) { \
+    if (pop_Stack_Bool(stack)) { \
       tBlock; \
     } \
   } while (0)
@@ -321,37 +348,37 @@ private string genOpsCode() {
   do { \
     CVMValue *r = pop_Stack(stack); \
     CVMValue *l = pop_Stack(stack); \
-    push_Stack_Double(stack, eq_CVMValue(l, r) ? 1.0 : 0.0); \
+    push_Stack_Bool(stack, eq_CVMValue(l, r)); \
   } while (0)
 #define Neq \
   do { \
     CVMValue *r = pop_Stack(stack); \
     CVMValue *l = pop_Stack(stack); \
-    push_Stack_Double(stack, !eq_CVMValue(l, r) ? 1.0 : 0.0); \
+    push_Stack_Bool(stack, !eq_CVMValue(l, r)); \
   } while (0)
 #define Lt \
   do { \
     CVMValue *r = pop_Stack(stack); \
     CVMValue *l = pop_Stack(stack); \
-    push_Stack_Double(stack, cmp_CVMValue(l, r) == -1 ? 1.0 : 0.0); \
+    push_Stack_Bool(stack, cmp_CVMValue(l, r) == -1); \
   } while (0)
 #define Leq \
   do { \
     CVMValue *r = pop_Stack(stack); \
     CVMValue *l = pop_Stack(stack); \
-    push_Stack_Double(stack, cmp_CVMValue(l, r) <= 0 ? 1.0 : 0.0); \
+    push_Stack_Bool(stack, cmp_CVMValue(l, r) <= 0); \
   } while (0)
 #define Gt \
   do { \
     CVMValue *r = pop_Stack(stack); \
     CVMValue *l = pop_Stack(stack); \
-    push_Stack_Double(stack, cmp_CVMValue(l, r) == 1 ? 1.0 : 0.0); \
+    push_Stack_Bool(stack, cmp_CVMValue(l, r) == 1); \
   } while (0)
 #define Geq \
   do { \
     CVMValue *r = pop_Stack(stack); \
     CVMValue *l = pop_Stack(stack); \
-    push_Stack_Double(stack, cmp_CVMValue(l, r) >= 0? 1.0 : 0.0); \
+    push_Stack_Bool(stack, cmp_CVMValue(l, r) >= 0); \
   } while (0)
 #define FreeLvars \
   do { \
@@ -379,7 +406,7 @@ private string genOpsCode() {
   do { \
     builtin_funcs[fname](stack, argc); \
   } while(0)
-  `;
+`;
 }
 
 Opcode[string] builtin_functions;
@@ -409,10 +436,17 @@ void builtin_Print(Stack *stack, int argc) {
                      printf("%f", values[i]->double_val);
                      break;
                    }
+      case Bool: {
+                   if (values[i]->bool_val) {
+                     printf("true");
+                   }else {
+                     printf("false");
+                   }
+                   break;
+                 }
     }
   }
 }
-
 void builtin_Println(Stack *stack, int argc) {
   CVMValue **values = (CVMValue**)xmalloc(sizeof(CVMValue*) * argc);
   for (size_t i = 0; i < argc; i++) {
@@ -424,6 +458,14 @@ void builtin_Println(Stack *stack, int argc) {
                      printf("%f", values[i]->double_val);
                      break;
                    }
+      case Bool: {
+                   if (values[i]->bool_val) {
+                     printf("true");
+                   }else {
+                     printf("false");
+                   }
+                   break;
+                 }
     }
   }
   printf("\n");
@@ -560,6 +602,17 @@ private class OpCell {
   }
 }
 
+class CCompileException : Exception {
+  this(string msg = "") {
+    if (msg == "") {
+      super("CCompileException");
+    }
+    else {
+      super("CCompileException: " ~ msg);
+    }
+  }
+}
+
 /* TODO:
   Constant Poolを生成する。具体的には
   DoublePool: size_t[double] でIDを振る。
@@ -653,7 +706,7 @@ string CodeCompileToC(Opcode[] code, ContantPool constant_pool, size_t start_ind
         case List:
         case Object:
         case Quote:
-          unimplemented();
+          throw new CCompileException("Unsupported Type given : %s".format(val.type));
         }
 
         break;
@@ -843,17 +896,6 @@ Label_end:
     return typeof(return).init;
   }
   else {
-    // currently for JIT; type of double is only supported.
-    import hvmd.ffi, hvmd.sexp;
-
-    SexpObjectType[] arg_types;
-    SexpObjectType ret_type;
-
-    foreach (_; 0 .. vmf.arg_names.length)
-      arg_types ~= SexpObjectType.Double;
-
-    ret_type = SexpObjectType.Double;
-
-    return nullable(new NativeFunction(dll_name, vmf.name, arg_types, ret_type));
+    return nullable(new NativeFunction(dll_name, vmf.name));
   }
 }

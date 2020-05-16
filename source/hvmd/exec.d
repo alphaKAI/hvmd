@@ -239,13 +239,13 @@ void vm_exec(Opcode[] code) {
     case OpcodeType.OpFuncDef: {
         VMValue vm = frame.v_ins[reg.pc++].to!(OpFuncDef).vm;
 
-        // Experimental
-        /*
-        import hvmd.jit;
-        VMFunctionCompileToC(vm.func);
-        */
         if (!vm.func.jit_compile_tried) {
-          vm.func.jitCompile();
+          try {
+            vm.func.jitCompile();
+          }
+          catch (hvmd.jit.CCompileException e) {
+            writeln("jit failed: " ~ e.msg);
+          }
         }
 
         frame.env.set(vm.func.name, vm);
@@ -268,7 +268,12 @@ void vm_exec(Opcode[] code) {
 
         VMFunction vmf = get_func_VMValue(v);
         if (vmf.opt_native_func.isNull && !vmf.jit_compile_tried) {
-          vmf.jitCompile();
+          try {
+            vmf.jitCompile();
+          }
+          catch (hvmd.jit.CCompileException e) {
+            writeln("jit failed: " ~ e.msg);
+          }
         }
 
         size_t argc = op_call.argc;
@@ -289,7 +294,6 @@ void vm_exec(Opcode[] code) {
         }
         else {
           NativeFunction nfunc = vmf.opt_native_func.get;
-          //writeln("Call nfunc: ", nfunc.name);
           VMValue[] args;
           args.length = argc;
           for (size_t i = 0; i < argc; i++) {

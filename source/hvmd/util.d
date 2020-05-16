@@ -20,13 +20,18 @@ long[] load_compiled_file(string file_name) {
 }
 
 class Unimplemented : Error {
-  this() {
-    super("Unimplemented");
+  this(string msg = "") {
+    if (msg == "") {
+      super("Unimplemented");
+    }
+    else {
+      super("Unimplemented: " ~ msg);
+    }
   }
 }
 
-void unimplemented() {
-  throw new Unimplemented();
+void unimplemented(string msg = "") {
+  throw new Unimplemented(msg);
 }
 
 import hvmd.opcode;

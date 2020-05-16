@@ -157,7 +157,7 @@ private {
         return new VMValue(new SexpObject(val));
       }
     case Bool: {
-        return new VMValue(new SexpObject(cast(bool) cast(ushort) arg));
+        return new VMValue(new SexpObject(cast(bool) arg));
       }
     case String: {
         auto v = cast(char*) arg;
@@ -172,11 +172,13 @@ private {
     }
   }
 
-  static VMValue CVMValue_to_VMValue(CVMValue* cvmvalue, SexpObjectType type) {
-    switch (type) with (SexpObjectType) {
+  static VMValue CVMValue_to_VMValue(CVMValue* cvmvalue) {
+    switch (cvmvalue.type) with (CVMValueType) {
     case Double: {
-        enforce(cvmvalue.type == CVMValueType.Double);
         return new VMValue(new SexpObject(cvmvalue.double_val));
+      }
+    case Bool: {
+        return new VMValue(new SexpObject(cvmvalue.bool_val));
       }
     default:
       throw new Exception("Unsupported type specified");
@@ -184,7 +186,8 @@ private {
   }
 
   enum CVMValueType {
-    Double
+    Double,
+    Bool
   }
 
   extern (C) {
@@ -192,6 +195,7 @@ private {
       CVMValueType type;
       union {
         double double_val;
+        bool bool_val;
       }
     }
   }
@@ -210,7 +214,11 @@ private {
         cvmvalue.double_val = val.getDouble;
         break;
       }
-    case Bool:
+    case Bool: {
+        cvmvalue.type = CVMValueType.Bool;
+        cvmvalue.bool_val = val.getBool;
+        break;
+      }
     case String:
     case Symbol:
     case List:
@@ -255,15 +263,11 @@ class NativeFunction {
   // function informations
   string name;
   void* func_ptr;
-  SexpObjectType[] arg_types;
-  SexpObjectType ret_type;
   ffi_cif cif;
 
-  this(string dll_path, string name, SexpObjectType[] arg_types, SexpObjectType ret_type) {
+  this(string dll_path, string name) {
     this.dll_path = dll_path;
     this.name = name;
-    this.arg_types = arg_types;
-    this.ret_type = ret_type;
 
     // resolve dll
     {
@@ -304,10 +308,6 @@ class NativeFunction {
   }
 
   VMValue call(VMValue[] args) {
-    foreach (i, arg; args) {
-      enforce(arg.type == VMValueType.VValue && this.arg_types[i] == arg.val.type);
-    }
-
     NativeFunctionArgument nfa = new NativeFunctionArgument(args.length, args);
 
     ffi_arg result;
@@ -317,7 +317,7 @@ class NativeFunction {
 
     ffi_call(&this.cif, this.func_ptr, &result, cast(void**) real_ffi_args);
     CVMValue* cvm_ret = ffi_arg_to_CVMValue(result);
-    VMValue ret = CVMValue_to_VMValue(cvm_ret, this.ret_type);
+    VMValue ret = CVMValue_to_VMValue(cvm_ret);
     return ret;
   }
 
