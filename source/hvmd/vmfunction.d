@@ -41,108 +41,6 @@ private {
     }
   }
 
-  static void*[] VMValues_into_void_ptr_array(VMValue[] values) {
-    void*[] ret;
-
-    foreach (value; values) {
-      if (VMValue_type_to_D_Type(value).isNull) { // check support
-        throw new Exception("Unsupported type given");
-      }
-
-      SexpObject sexp = value.val;
-      switch (sexp.type) with (SexpObjectType) {
-      case Double: {
-          ret ~= &sexp.double_val;
-          break;
-        }
-      case Bool: {
-          ret ~= &sexp.bool_val;
-          break;
-        }
-      case String:
-      case Symbol: {
-          ret ~= &sexp.string_val;
-          break;
-        }
-      default:
-        break;
-      }
-    }
-
-    return ret;
-  }
-
-  static bool checkCastable(T)(void* ptr) {
-    return (cast(T*) ptr) !is null;
-  }
-
-  static void validate_ptr_type_D_Type(void* ptr, D_TYPE type) {
-    final switch (type) with (D_TYPE) {
-    case VOID:
-      break;
-    case UBYTE:
-      if (!checkCastable!(ubyte)(ptr)) {
-        throw new Error("Invalid argument<type error>");
-      }
-      break;
-    case BYTE:
-      if (!checkCastable!(byte)(ptr)) {
-        throw new Error("Invalid argument<type error>");
-      }
-      break;
-    case USHORT:
-      if (!checkCastable!(ushort)(ptr)) {
-        throw new Error("Invalid argument<type error>");
-      }
-      break;
-    case SHORT:
-      if (!checkCastable!(short)(ptr)) {
-        throw new Error("Invalid argument<type error>");
-      }
-      break;
-    case UINT:
-      if (!checkCastable!(uint)(ptr)) {
-        throw new Error("Invalid argument<type error>");
-      }
-      break;
-    case INT:
-      if (!checkCastable!(int)(ptr)) {
-        throw new Error("Invalid argument<type error>");
-      }
-      break;
-    case ULONG:
-      if (!checkCastable!(ulong)(ptr)) {
-        throw new Error("Invalid argument<type error>");
-      }
-      break;
-    case LONG:
-      if (!checkCastable!(long)(ptr)) {
-        throw new Error("Invalid argument<type error>");
-      }
-      break;
-    case FLOAT:
-      if (!checkCastable!(float)(ptr)) {
-        throw new Error("Invalid argument<type error>");
-      }
-      break;
-    case DOUBLE:
-      if (!checkCastable!(double)(ptr)) {
-        throw new Error("Invalid argument<type error>");
-      }
-      break;
-    case POINTER:
-      if (!checkCastable!(void)(ptr)) {
-        throw new Error("Invalid argument<type error>");
-      }
-      break;
-    case STRING:
-      if (!checkCastable!(char)(ptr)) {
-        throw new Error("Invalid argument<type error>");
-      }
-      break;
-    }
-  }
-
   static CVMValue* ffi_arg_to_CVMValue(ffi_arg arg) {
     return cast(CVMValue*) arg;
   }
@@ -173,21 +71,28 @@ private {
   }
 
   static VMValue CVMValue_to_VMValue(CVMValue* cvmvalue) {
-    switch (cvmvalue.type) with (CVMValueType) {
+    final switch (cvmvalue.type) with (CVMValueType) {
+    case Unit: {
+        return new VMValue(new SexpObject(new SexpObject([]), SexpObjectType.Quote));
+      }
     case Double: {
         return new VMValue(new SexpObject(cvmvalue.double_val));
       }
     case Bool: {
         return new VMValue(new SexpObject(cvmvalue.bool_val));
       }
-    default:
-      throw new Exception("Unsupported type specified");
+    case String: {
+        return new VMValue(new SexpObject(cast(string) cvmvalue.string_val.fromStringz,
+            SexpObjectType.String));
+      }
     }
   }
 
   enum CVMValueType {
+    Unit,
     Double,
-    Bool
+    Bool,
+    String,
   }
 
   extern (C) {
@@ -196,6 +101,7 @@ private {
       union {
         double double_val;
         bool bool_val;
+        char* string_val;
       }
     }
   }
@@ -219,9 +125,13 @@ private {
         cvmvalue.bool_val = val.getBool;
         break;
       }
-    case String:
-    case Symbol:
+    case String: {
+        cvmvalue.type = CVMValueType.String;
+        cvmvalue.string_val = cast(char*) val.getString.toStringz;
+        break;
+      }
     case List:
+    case Symbol:
     case Object:
     case Quote:
       unimplemented();

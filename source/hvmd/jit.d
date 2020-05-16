@@ -13,6 +13,7 @@ private string genRuntimeCode() {
 #include <stdlib.h>
 #include <assert.h>
 #include <stdbool.h>
+#include <string.h>
 
 static inline double dmod(double x, double y) { return x - ((x / y) * y); }
 
@@ -29,8 +30,10 @@ static inline void* xmalloc(size_t size) {
 static inline void xfree(void *ptr) { free(ptr); }
 
 typedef enum {
+  Unit,
   Double,
   Bool,
+  String,
 } CVMValueType;
 
 typedef struct {
@@ -38,11 +41,20 @@ typedef struct {
   union {
     double double_val;
     bool bool_val;
+    char *string_val;
   };
 } CVMValue;
 
 void enforce_CVMValueType(CVMValue *vmvalue, CVMValueType type) {
   assert(vmvalue->type == type);
+}
+
+CVMValue *new_CVMValue_Unit(void) {
+  CVMValue *vmvalue = xmalloc(sizeof(CVMValue));
+
+  vmvalue->type = Unit;
+
+  return vmvalue;
 }
 
 CVMValue *new_CVMValue_Double(double x) {
@@ -63,6 +75,15 @@ CVMValue *new_CVMValue_Bool(bool x) {
   return vmvalue;
 }
 
+CVMValue *new_CVMValue_String(char *x) {
+  CVMValue *vmvalue = xmalloc(sizeof(CVMValue));
+
+  vmvalue->type = String;
+  vmvalue->string_val = x;
+
+  return vmvalue;
+}
+
 double get_CVMValue_Double(CVMValue *vmvalue) {
   enforce_CVMValueType(vmvalue, Double);
   return vmvalue->double_val;
@@ -71,6 +92,11 @@ double get_CVMValue_Double(CVMValue *vmvalue) {
 bool get_CVMValue_Bool(CVMValue *vmvalue) {
   enforce_CVMValueType(vmvalue, Bool);
   return vmvalue->bool_val;
+}
+
+char *get_CVMValue_String(CVMValue *vmvalue) {
+  enforce_CVMValueType(vmvalue, String);
+  return vmvalue->string_val;
 }
 
 CVMValue *dup_CVMValue(CVMValue *src) {
@@ -87,6 +113,13 @@ CVMValue *dup_CVMValue(CVMValue *src) {
                    dst->bool_val = src->bool_val;
                    break;
                  }
+    case String: {
+                   size_t src_len = strlen(src->string_val);
+                   dst->string_val = (char*)xmalloc(sizeof(char) * (src_len + 1));
+                   memcpy(dst->string_val, src->string_val, src_len);
+                   dst->string_val[src_len] = '\0';
+                 }
+    case Unit: { break; }
   }
 
   return dst;
@@ -106,7 +139,6 @@ int cmp_CVMValue(CVMValue *lhs, CVMValue *rhs) {
                    } else if (lhs->double_val > rhs->double_val) {
                      return 1;
                    }
-                   break;
                  }
     case Bool: {
                    if (lhs->bool_val != rhs->bool_val) {
@@ -114,8 +146,14 @@ int cmp_CVMValue(CVMValue *lhs, CVMValue *rhs) {
                    } else if (lhs->bool_val == rhs->bool_val) {
                      return 0;
                    }
-                   break;
                  }
+    case String: {
+                   int cmp_ret = strcmp(lhs->string_val, rhs->string_val);
+                   if (cmp_ret < 0) { return -1; }
+                   else if (cmp_ret == 0) { return 0; }
+                   else { return 1; }
+                 }
+    case Unit: { break; }
   }
 
   return -1;
@@ -157,6 +195,11 @@ void push_Stack(Stack *stack, CVMValue *val) {
   stack->stack[stack->len++] = val;
 }
 
+void push_Stack_Unit(Stack *stack) {
+  CVMValue *v = new_CVMValue_Unit();
+  push_Stack(stack, v);
+}
+
 void push_Stack_Double(Stack *stack, double val) {
   CVMValue *v = new_CVMValue_Double(val);
   push_Stack(stack, v);
@@ -167,9 +210,19 @@ void push_Stack_Bool(Stack *stack, bool val) {
   push_Stack(stack, v);
 }
 
+void push_Stack_String(Stack *stack, char *val) {
+  CVMValue *v = new_CVMValue_String(val);
+  push_Stack(stack, v);
+}
+
 CVMValue *pop_Stack(Stack *stack) {
   CVMValue *ret = stack->stack[--stack->len];
   return ret;
+}
+
+void pop_Stack_Unit(Stack *stack) {
+  CVMValue *popped = pop_Stack(stack);
+  enforce_CVMValueType(popped, Unit);
 }
 
 double pop_Stack_Double(Stack *stack) {
@@ -182,6 +235,12 @@ bool pop_Stack_Bool(Stack *stack) {
   CVMValue *popped = pop_Stack(stack);
   enforce_CVMValueType(popped, Bool);
   return popped->bool_val;
+}
+
+char *pop_Stack_String(Stack *stack) {
+  CVMValue *popped = pop_Stack(stack);
+  enforce_CVMValueType(popped, String);
+  return popped->string_val;
 }
 
 bool Stack_isempty(Stack *stack) {
@@ -290,6 +349,10 @@ private string genOpsCode() {
 #define GetLocal(idx) \
   do { \
     push_Stack(stack, current_frame.memory[idx]); \
+  } while (0)
+#define SetLocal(idx) \
+  do { \
+    current_frame.memory[idx] = pop_Stack(stack); \
   } while (0)
 #define Label(label) \
   Label_##label:
@@ -402,7 +465,7 @@ private string genOpsCode() {
   } while(0)
 #define DefFun(id) \
   FUNC_ ##id:
-#define BuiltinCall(fname, argc) \
+#define CallBuiltin(fname, argc) \
   do { \
     builtin_funcs[fname](stack, argc); \
   } while(0)
@@ -411,7 +474,7 @@ private string genOpsCode() {
 
 Opcode[string] builtin_functions;
 static this() {
-  builtin_functions = ["Print": opPrint, "Println": opPrintln];
+  builtin_functions = ["print": opPrint, "println": opPrintln];
 }
 
 static Opcode check_builtin(string name) {
@@ -432,6 +495,10 @@ void builtin_Print(Stack *stack, int argc) {
   }
   for (size_t i = 0; argc > 0; argc--, i++) {
     switch (values[i]->type) {
+      case Unit: {
+                   printf("'()");
+                   break;
+                 }
       case Double: {
                      printf("%f", values[i]->double_val);
                      break;
@@ -444,6 +511,10 @@ void builtin_Print(Stack *stack, int argc) {
                    }
                    break;
                  }
+      case String: {
+                     printf("%s", values[i]->string_val);
+                     break;
+                   }
     }
   }
 }
@@ -454,6 +525,10 @@ void builtin_Println(Stack *stack, int argc) {
   }
   for (size_t i = 0; argc > 0; argc--, i++) {
     switch (values[i]->type) {
+      case Unit: {
+                   printf("'()");
+                   break;
+                 }
       case Double: {
                      printf("%f", values[i]->double_val);
                      break;
@@ -466,6 +541,10 @@ void builtin_Println(Stack *stack, int argc) {
                    }
                    break;
                  }
+      case String: {
+                     printf("%s", values[i]->string_val);
+                     break;
+                   }
     }
   }
   printf("\n");
@@ -478,7 +557,7 @@ enum {
   Println
 };
 
-BUILTIN_FUNC builtin_funcs[] = {
+static BUILTIN_FUNC builtin_funcs[] = {
   [Print] = &builtin_Print,
   [Println] = &builtin_Println
 };
@@ -499,7 +578,33 @@ CVMValue *get_Double_from_Constant_Pool(size_t idx) {
   }
 }`.format(constant_pool.double_pool.length);
 
-  return double_constant_pool_code;
+  string bool_constant_pool_code = `
+#define BOOL_CONSTANT_POOL_SIZE %s
+static CVMValue **BOOL_CONSTANT_POOL;
+
+CVMValue *get_Bool_from_Constant_Pool(size_t idx) {
+  if (idx < BOOL_CONSTANT_POOL_SIZE) {
+    return BOOL_CONSTANT_POOL[idx];
+  } else {
+    fprintf(stderr, "out of range\n");
+    exit(EXIT_FAILURE);
+  }
+}`.format(constant_pool.bool_pool.length);
+
+  string string_constant_pool_code = `
+#define STRING_CONSTANT_POOL_SIZE %s
+static CVMValue **STRING_CONSTANT_POOL;
+
+CVMValue *get_String_from_Constant_Pool(size_t idx) {
+  if (idx < STRING_CONSTANT_POOL_SIZE) {
+    return STRING_CONSTANT_POOL[idx];
+  } else {
+    fprintf(stderr, "out of range\n");
+    exit(EXIT_FAILURE);
+  }
+}`.format(constant_pool.string_pool.length);
+
+  return double_constant_pool_code ~ bool_constant_pool_code ~ string_constant_pool_code;
 }
 
 private string genInitCode(string name, ContantPool constant_pool) {
@@ -518,6 +623,22 @@ void %s_init(void) {
   }
 
   init_code ~= `
+    BOOL_CONSTANT_POOL = xmalloc(sizeof(CVMValue*) * BOOL_CONSTANT_POOL_SIZE);`;
+  foreach (val; constant_pool.bool_pool.keys) {
+    size_t id = constant_pool.bool_pool[val];
+    init_code ~= `
+    BOOL_CONSTANT_POOL[%s] = new_CVMValue_BOOL(%s);`.format(id, val);
+  }
+
+  init_code ~= `
+    STRING_CONSTANT_POOL = xmalloc(sizeof(CVMValue*) * STRING_CONSTANT_POOL_SIZE);`;
+  foreach (val; constant_pool.string_pool.keys) {
+    size_t id = constant_pool.string_pool[val];
+    init_code ~= `
+    STRING_CONSTANT_POOL[%s] = new_CVMValue_String("%s");`.format(id, val);
+  }
+
+  init_code ~= `
     %s_INITIALIZED = true;
   }
 }`;
@@ -527,6 +648,8 @@ void %s_init(void) {
 
 struct ContantPool {
   size_t[double] double_pool;
+  size_t[bool] bool_pool;
+  size_t[string] string_pool;
 }
 
 bool chmax(T)(ref T a, T b) {
@@ -554,8 +677,20 @@ ContantPool calcContantPool(Opcode[] code) {
             }
             break;
           }
-        case Bool:
-        case String:
+        case Bool: {
+            bool bool_val = val.bool_val;
+            if (bool_val !in constant_pool.bool_pool) {
+              constant_pool.bool_pool[bool_val] = constant_pool.bool_pool.length;
+            }
+            break;
+          }
+        case String: {
+            string string_val = val.string_val;
+            if (string_val !in constant_pool.string_pool) {
+              constant_pool.string_pool[string_val] = constant_pool.string_pool.length;
+            }
+            break;
+          }
         case Symbol:
         case List:
         case Object:
@@ -695,13 +830,23 @@ string CodeCompileToC(Opcode[] code, ContantPool constant_pool, size_t start_ind
 
         final switch (val.type) with (SexpObjectType) {
         case Double: {
-            const double double_val = val.getDouble;
-            size_t pool_idx = constant_pool.double_pool[double_val];
+            const auto vval = val.getDouble;
+            size_t pool_idx = constant_pool.double_pool[vval];
             emitCode("Push(get_Double_from_Constant_Pool(%s))".format(pool_idx));
             break;
           }
-        case Bool:
-        case String:
+        case Bool: {
+            const auto vval = val.getBool;
+            size_t pool_idx = constant_pool.bool_pool[vval];
+            emitCode("Push(get_Bool_from_Constant_Pool(%s))".format(pool_idx));
+            break;
+          }
+        case String: {
+            const auto vval = val.getString;
+            size_t pool_idx = constant_pool.string_pool[vval];
+            emitCode("Push(get_String_from_Constant_Pool(%s))".format(pool_idx));
+            break;
+          }
         case Symbol:
         case List:
         case Object:
@@ -763,7 +908,7 @@ string CodeCompileToC(Opcode[] code, ContantPool constant_pool, size_t start_ind
       emitCode("CallBuiltin(Print, %d)".format(argc));
       break;
     case OpcodeType.OpPrintln:
-      emitCode("CallBuiltin(Print, %d)".format(argc));
+      emitCode("CallBuiltin(Println, %d)".format(argc));
       break;
     case OpcodeType.OpJumpRel:
       emitCode("Jump(%s)".format(cell.dst_label));
@@ -868,7 +1013,7 @@ Label_end:
     free_Stack(stack);
     return v;
   } else {
-    return 0;
+    return new_CVMValue_Unit();
   }
 }
 }.format(vmf.name, vmf.name, vmf.name, func_body_code);
