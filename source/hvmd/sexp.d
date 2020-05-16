@@ -2,7 +2,7 @@ module hvmd.sexp;
 import std.exception, std.string;
 
 enum SexpObjectType {
-  Float,
+  Double,
   Bool,
   String,
   Symbol,
@@ -14,7 +14,7 @@ enum SexpObjectType {
 class SexpObject {
   SexpObjectType type;
   union {
-    double float_val;
+    double double_val;
     bool bool_val;
     string string_val;
     SexpObject[] list_val;
@@ -26,8 +26,8 @@ class SexpObject {
   }
 
   this(double val) {
-    this(SexpObjectType.Float);
-    this.float_val = val;
+    this(SexpObjectType.Double);
+    this.double_val = val;
   }
 
   this(bool val) {
@@ -51,8 +51,8 @@ class SexpObject {
   }
 
   double getDouble() {
-    enforce(this.type == SexpObjectType.Float);
-    return this.float_val;
+    enforce(this.type == SexpObjectType.Double);
+    return this.double_val;
   }
 
   bool getBool() {
@@ -87,8 +87,8 @@ class SexpObject {
 
   override string toString() {
     final switch (this.type) with (SexpObjectType) {
-    case Float:
-      return "%f".format(this.float_val);
+    case Double:
+      return "%f".format(this.double_val);
     case Bool:
       return "%s".format(this.bool_val);
     case String:
@@ -122,8 +122,8 @@ class SexpObject {
     that.type = this.type;
 
     final switch (this.type) with (SexpObjectType) {
-    case Float: {
-        that.float_val = this.float_val;
+    case Double: {
+        that.double_val = this.double_val;
         break;
       }
     case Bool: {

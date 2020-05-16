@@ -46,7 +46,7 @@ int cmp_VMValue(VMValue v1, VMValue v2) {
   final switch (v1.type) with (VMValueType) {
   case VValue: {
       final switch (v1.val.type) with (SexpObjectType) {
-      case Float: {
+      case Double: {
           double l = v1.val.getDouble;
           double r = v2.val.getDouble;
           if (l == r) {

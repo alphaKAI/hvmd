@@ -6,7 +6,8 @@ import std.string;
 import std.typecons;
 import std.exception;
 import std.stdio;
-import hvmd.ffi, hvmd.jit;
+import core.memory;
+import hvmd.ffi, hvmd.jit, hvmd.util;
 
 bool JIT_ENABLED = true;
 
@@ -16,7 +17,7 @@ private {
 
   static Nullable!D_TYPE SexpObjectType_to_D_Type(SexpObjectType type) {
     final switch (type) with (SexpObjectType) {
-    case Float:
+    case Double:
       return D_TYPE.DOUBLE.nullable;
     case Bool:
       return D_TYPE.USHORT.nullable;
@@ -50,8 +51,8 @@ private {
 
       SexpObject sexp = value.val;
       switch (sexp.type) with (SexpObjectType) {
-      case Float: {
-          ret ~= &sexp.float_val;
+      case Double: {
+          ret ~= &sexp.double_val;
           break;
         }
       case Bool: {
@@ -142,9 +143,13 @@ private {
     }
   }
 
+  static CVMValue* ffi_arg_to_CVMValue(ffi_arg arg) {
+    return cast(CVMValue*) arg;
+  }
+
   static VMValue ffi_arg_to_VMValue(ffi_arg arg, SexpObjectType type) {
     switch (type) with (SexpObjectType) {
-    case Float: {
+    case Double: {
         double val;
         import core.stdc.string;
 
@@ -166,21 +171,71 @@ private {
       throw new Exception("Unsupported type specified");
     }
   }
+
+  static VMValue CVMValue_to_VMValue(CVMValue* cvmvalue, SexpObjectType type) {
+    switch (type) with (SexpObjectType) {
+    case Double: {
+        enforce(cvmvalue.type == CVMValueType.Double);
+        return new VMValue(new SexpObject(cvmvalue.double_val));
+      }
+    default:
+      throw new Exception("Unsupported type specified");
+    }
+  }
+
+  enum CVMValueType {
+    Double
+  }
+
+  extern (C) {
+    struct CVMValue {
+      CVMValueType type;
+      union {
+        double double_val;
+      }
+    }
+  }
+
+  CVMValue* VMValue_to_CVMValue(VMValue vmvalue) {
+    if (vmvalue.type == VMValueType.VFunc) {
+      unimplemented();
+    }
+
+    CVMValue* cvmvalue = cast(CVMValue*) GC.malloc(CVMValue.sizeof);
+    SexpObject val = vmvalue.val;
+
+    final switch (val.type) with (SexpObjectType) {
+    case Double: {
+        cvmvalue.type = CVMValueType.Double;
+        cvmvalue.double_val = val.getDouble;
+        break;
+      }
+    case Bool:
+    case String:
+    case Symbol:
+    case List:
+    case Object:
+    case Quote:
+      unimplemented();
+    }
+
+    return cvmvalue;
+  }
 }
 
 class NativeFunctionArgument {
   size_t* argc;
-  double** args;
+  CVMValue** args;
 
   import core.memory;
 
-  this(size_t argc, double[] args) {
+  this(size_t argc, VMValue[] args) {
     this.argc = new size_t;
     *this.argc = argc;
 
-    this.args = cast(double**) GC.malloc((double*).sizeof * args.length);
+    this.args = cast(CVMValue**) GC.malloc((CVMValue*).sizeof * args.length);
     foreach (i, ref arg; args) {
-      this.args[i] = &arg;
+      this.args[i] = VMValue_to_CVMValue(arg);
     }
   }
 
@@ -210,14 +265,6 @@ class NativeFunction {
     this.arg_types = arg_types;
     this.ret_type = ret_type;
 
-    // FIXME: Currently specilized for double
-    foreach (arg_type; arg_types) {
-      enforce(arg_type == SexpObjectType.Float);
-    }
-    enforce(ret_type == SexpObjectType.Float);
-
-    import std.string;
-
     // resolve dll
     {
       this.handle = dlopen(dll_path.toStringz, RTLD_LAZY);
@@ -242,10 +289,9 @@ class NativeFunction {
       import std.algorithm : map;
       import std.array : array;
 
-      // native function take argc as a first arg
-      //auto arg_d_types = [D_TYPE.INT] ~ arg_types.map!((e) => e.SexpObjectType_to_D_Type.get).array;
+      // FFI interface: CVMValue* fun(size_t, CVMValue* args)
       auto arg_d_types = [D_TYPE.ULONG, D_TYPE.POINTER];
-      auto ret_d_type = SexpObjectType_to_D_Type(ret_type).get;
+      auto ret_d_type = D_TYPE.POINTER;
 
       auto _arg_types = d_types_to_ffi_types(arg_d_types);
       auto _r_type = d_type_to_ffi_type(ret_d_type);
@@ -258,28 +304,20 @@ class NativeFunction {
   }
 
   VMValue call(VMValue[] args) {
-    // FIXME: Currently specilized for double
-    //writefln("NativeFunc<%s> called with args: %s", this.name, args);
-    // validate type spec
     foreach (i, arg; args) {
       enforce(arg.type == VMValueType.VValue && this.arg_types[i] == arg.val.type);
-      enforce(arg.val.type == SexpObjectType.Float);
     }
 
-    double[] nfa_args;
-    foreach (arg; args) {
-      nfa_args ~= arg.val.float_val;
-    }
-
-    NativeFunctionArgument nfa = new NativeFunctionArgument(args.length, nfa_args);
+    NativeFunctionArgument nfa = new NativeFunctionArgument(args.length, args);
 
     ffi_arg result;
     void*[] real_ffi_args;
     real_ffi_args ~= nfa.argc;
-    real_ffi_args ~= nfa.args;
+    real_ffi_args ~= &nfa.args;
 
     ffi_call(&this.cif, this.func_ptr, &result, cast(void**) real_ffi_args);
-    VMValue ret = ffi_arg_to_VMValue(result, ret_type);
+    CVMValue* cvm_ret = ffi_arg_to_CVMValue(result);
+    VMValue ret = CVMValue_to_VMValue(cvm_ret, this.ret_type);
     return ret;
   }
 

@@ -34,7 +34,7 @@ static DeserializeVMValueResult deserialize_vmvalue(long[] serialized, size_t fi
   case VValue: {
       SexpObjectType obj_ty = serialized[idx++].to!SexpObjectType;
       final switch (obj_ty) with (SexpObjectType) {
-      case Float: {
+      case Double: {
           long lv = serialized[idx++];
           double dv;
           memcpy(&dv, &lv, double.sizeof);
